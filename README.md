@@ -1,6 +1,11 @@
 # Pget
 一个 PHP 版的 Wget，A PHP implementation of Wget
-主要的特点：解决 Windows 中文环境中原路径保存中文网址时乱码问题。其它情况下 Wget 性能更好。
+
+主要的特点：解决 Windows 中文环境中原路径保存中文网址时乱码问题。
+
+带日志文件，从中断恢复更方便
+
+其它情况下 Wget 性能更好。
 
 <p><br />一个 PHP 版的 Wget，面向对象重构版。仅下载 HTTP,HTTPS,FTP 文件<br />使用了内存做缓存<br />版本：2.0<br />作者：icos</p>
 <p>用法示例：<br />php pget.php --recursive --adjust-extension --restrict-file-names --no-check-certificate --tries=10 --wait=0.5 --save-cookies="cookie" --user-agent="Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)" --reject-regex="\?|#|&amp;|(?:\.rar)|(?:\.zip)|(?:\.epub)|(?:\.txt)|(?:\.pdf)" --reject="woff,jpg,png,webp" --accept="html,js,css" --sub-string="&lt;p id=\"b\"&gt;,&lt;p class=\"a b\"&gt;|&lt;/p&gt;,&lt;/p&gt;" https://domain/<br />php pget.php https://domain/link<br />php pget.php --input-file="urls.txt"</p>
