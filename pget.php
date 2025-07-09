@@ -1,11 +1,24 @@
 <?php
+/*
+／＞　 フ
+| 　_　_| 
+／` ミ＿xノ 
+/　　　　 |
+/　 ヽ　　 ﾉ
+│　　|　|　|
+／￣|　　 |　|　|
+(￣ヽ＿_ヽ_)__)
+＼二)
+
+小狗提示：代码萌萌哒，注意看注释哦！
+*/
 
 /**
  * Pget.php
  * 
  * A PHP implementation of Wget, object-oriented refactored version. Only surports HTTP,HTTPS,FTP
- * cache in memory
- * Version: 2.0
+ * no cache except link table
+ * Version: 2.1 link table shard
  * Author: icos
  * 
  * Usage examples:
@@ -52,8 +65,8 @@
  * Pget.php
  * 
  * 一个 PHP 版的 Wget，面向对象重构版。仅下载 HTTP,HTTPS,FTP 文件
- * 使用了内存做缓存
- * 版本：2.0
+ * 除了必须的链接表，没有使用缓存
+ * 版本：2.1 链接表分片
  * 作者：icos
  * 
  * 用法示例：
@@ -97,91 +110,17 @@
  * 
  */
 
-// 检查是否在命令行模式下运行
-if (php_sapi_name() !== 'cli') die("This script can only be run in CLI mode.\n");
-// 检查操作系统类型
-$isWindows = stripos(PHP_OS, 'WIN') === 0;
-// 设置错误级别、超时、内存、时区等
-// 只显示除了通知之外的所有错误
-error_reporting(E_ALL & ~E_NOTICE);
-// 设置脚本执行时间无限制
-set_time_limit(0);
-// 忽略用户断开连接，确保脚本继续执行
-ignore_user_abort(true);
-// 设置脚本可使用的最大内存为20480M
-ini_set('memory_limit', '20480M');
-// 设置时区为亚洲上海
-date_default_timezone_set('Asia/Shanghai');
-// PHP版本检查
-if (version_compare(PHP_VERSION, '8.0.0', '<')) die("PHP 8.0+ required.\n");
-// 致命错误兜底
-function pget_shutdown_handler()
-{
-    global $pget;
-    $error = error_get_last();
-    $usage_mb = round(memory_get_usage() / 1024 / 1024, 2);
-    $url = $pget->cfg['--start-url'] ?? '';
-    $log_file = __DIR__ . '/pget_shutdown.log';
-    $now = date('Y-m-d H:i:s');
-    if ($error) {
-        $type = $error['type'] ?? 0;
-        $type_str = match ($type) {
-            E_ERROR => 'E_ERROR',
-            E_PARSE => 'E_PARSE',
-            E_CORE_ERROR => 'E_CORE_ERROR',
-            E_COMPILE_ERROR => 'E_COMPILE_ERROR',
-            E_USER_ERROR => 'E_USER_ERROR',
-            E_RECOVERABLE_ERROR => 'E_RECOVERABLE_ERROR',
-            default => 'OTHER',
-        };
-        $msg = "[SHUTDOWN] {$now} [致命错误] 类型: {$type_str}\n";
-        $msg .= "  消息: {$error['message']}\n";
-        $msg .= "  文件: {$error['file']} : {$error['line']}\n";
-        $msg .= "  起始URL: {$url}\n";
-        $msg .= "  日志文件: {$log_file}\n";
-        $msg .= "  内存占用: {$usage_mb} MB\n";
-        $msg .= "  说明: 脚本因致命错误终止，请检查上述错误信息。\n";
-        echo "\n========== 脚本异常终止 ==========\n";
-        echo $msg;
-    } else {
-        $msg = "[SHUTDOWN] {$now} [正常退出]\n";
-        $msg .= "  起始URL: {$url}\n";
-        $msg .= "  内存占用: {$usage_mb} MB\n";
-        $msg .= "  说明: 脚本正常退出。\n";
-        echo "\n========== 脚本正常退出 ==========\n";
-        echo $msg;
-    }
-    file_put_contents($log_file, $msg, FILE_APPEND);
-    if (isset($pget) && method_exists($pget, 'flush_log_buffer')) {
-        $pget->flush_log_buffer();
-    }
-}
-register_shutdown_function('pget_shutdown_handler');
-// 信号处理公共函数
-function pget_signal_handler($signal_type, $signal_name, $exit_code)
-{
-    global $pget;
-    $usage_mb = round(memory_get_usage() / 1024 / 1024, 2);
-    $now = date('Y-m-d H:i:s');
-    $url = $pget->cfg['--start-url'] ?? '';
-    $log_file = __DIR__ . '/pget_shutdown.log';
-    $msg = "[SIGNAL] {$now} [{$signal_type}: {$signal_name}]\n";
-    $msg .= "  起始URL: {$url}\n";
-    $msg .= "  日志文件: {$log_file}\n";
-    $msg .= "  内存占用: {$usage_mb} MB\n";
-    $msg .= "  说明: 收到 {$signal_name} 信号，脚本被" . ($signal_name === 'SIGINT' ? '用户中断' : '外部终止') . "。\n";
-    echo "\n========== 脚本被" . ($signal_name === 'SIGINT' ? '用户中断 (Ctrl+C)' : '外部终止 (SIGTERM)') . " ==========\n";
-    echo $msg;
-    file_put_contents($log_file, $msg, FILE_APPEND);
-    if (isset($pget) && method_exists($pget, 'flush_log_buffer')) {
-        $pget->flush_log_buffer();
-    }
-    if (isset($pget->log_file_handle) && is_resource($pget->log_file_handle)) {
-        fclose($pget->log_file_handle);
-    }
-    exit($exit_code);
-}
-// 中止信号兜底
+
+if (php_sapi_name() !== 'cli') die("Only be run in CLI mode.\n"); // 检查是否在命令行模式下运行
+if (version_compare(PHP_VERSION, '8.0.0', '<')) die("PHP 8.0+ Required.\n"); // PHP版本检查
+if (!extension_loaded('pdo_sqlite')) echo "pdo_sqlite extension is not enabled. logs wiil not be using.\n"; // 检查 PDO SQLite 是否可用
+error_reporting(E_ALL & ~E_NOTICE); // 只显示除了通知之外的所有错误
+set_time_limit(0); // 设置脚本执行时间无限制
+ignore_user_abort(1); // 忽略用户断开连接，确保脚本继续执行
+ini_set('memory_limit', '20480M'); // 设置脚本可使用的最大内存为20480M
+date_default_timezone_set('Asia/Shanghai'); // 设置时区为亚洲上海
+register_shutdown_function('pget_shutdown_handler'); // 致命错误兜底
+// 中止信号兜底（windows 不支持 pcntl_signal ）
 if (function_exists('pcntl_signal')) {
     pcntl_signal(SIGINT, function () {
         pget_signal_handler('中断信号', 'SIGINT', 130);
@@ -190,7 +129,6 @@ if (function_exists('pcntl_signal')) {
         pget_signal_handler('终止信号', 'SIGTERM', 143);
     });
 }
-
 // =================== 启动入口 ===================
 // 解析命令行参数，初始化配置和主类，启动主流程
 
@@ -205,6 +143,7 @@ try {
     file_put_contents(__DIR__ . '/pget_shutdown.log', "[EXCEPTION] " . date('Y-m-d H:i:s') . " " . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n", FILE_APPEND);
     throw $e;
 }
+
 // =================== 配置类 ===================
 class PgetConfig
 {
@@ -242,7 +181,7 @@ class PgetConfig
         '--retry-connrefused' => 0,
         '--level' => 5,
     ];
-    public array $substr_sign = [];
+    public array $sub_string_rules = [];
     public bool $isWindows = false;
     public bool $isChineseWindows = false;
 
@@ -273,7 +212,7 @@ class PgetConfig
                     if ($config_name == '--sub-string') {
                         $amd = explode('|', $config_value, 2);
                         if ($amd[1]) {
-                            $this->substr_sign = [
+                            $this->sub_string_rules = [
                                 explode(',', $amd[0]),
                                 explode(',', $amd[1])
                             ];
@@ -362,8 +301,10 @@ class Pget
     public array $cfg = [];
     // 循环计数
     private int $loop_count = 1;
-    // 已处理链接表，[true ：本地文件存在 / false ：本地文件不存在, true ：允许的 / false ：被过滤的, array @parse_url]
-    public array $link_table = [];
+    // 已处理链接表：键为链接，值为布尔值（true=本地文件存在，false=不存在，null=不存在）
+    public ArraySharder $link_table;
+    // 本地文件表：键为链接，值为布尔值（存储本地文件，文件太多时file_exists效率会下降）
+    // public ArraySharder $file_table;
     // 待处理链接队列
     public SplQueue $pending_queue;
     // 日志文件句柄
@@ -377,31 +318,43 @@ class Pget
     // 日志缓存
     private array $log_buffer = [];
     // 扩展名
-    private array $extension_array = [];
+    private array $extensions = [];
     // 响应头内容类型
     private array $content_type = [];
-    // 起始链接的主机名
-    private string $start_url_host = '';
+    // 起始链接相关信息
+    private array $start_info = [];
     // 主机列表
-    private array $domains = [];
+    private array $domain_list = [];
+    // 浏览器句柄
+    private $curl_handle = null;
+    // 目录前缀
+    private string $dir_prefix = '';
+
     /**
      * 构造函数，初始化配置和队列
      */
     public function __construct(PgetConfig $config)
     {
+        // 定义链接表
+        $this->link_table = new ArraySharder();
+        // 定义文件表
+        // $this->file_table = new ArraySharder();
         // 保存配置对象
         $this->config = $config;
         // 初始化待处理链接队列
         $this->pending_queue = new SplQueue();
         // 保存配置选项
         $this->cfg = $this->config->options;
+        // 目录前缀
+        $this->dir_prefix = str_replace('/', DIRECTORY_SEPARATOR, $this->cfg['--directory-prefix']);
+        $this->dir_prefix = rtrim($this->dir_prefix, DIRECTORY_SEPARATOR);
         // 若目录不存在，则创建目录
-        if (!is_dir($this->cfg['--directory-prefix'])) {
-            mkdir($this->cfg['--directory-prefix'], 0777, true);
+        if (!is_dir($this->dir_prefix)) {
+            mkdir($this->dir_prefix, 0777, true);
         }
         // 如果配置了输出日志文件，则打开文件句柄并清空旧内容
         if ($this->cfg['--output-file']) {
-            $log_file = $this->cfg['--directory-prefix'] . DIRECTORY_SEPARATOR . $this->cfg['--output-file'];
+            $log_file = $this->dir_prefix . DIRECTORY_SEPARATOR . $this->cfg['--output-file'];
             $this->log_file_handle = fopen($log_file, 'w');
             if (!$this->log_file_handle) {
                 throw new \InvalidArgumentException("Failed to open log file: {$log_file}\n");
@@ -429,11 +382,51 @@ class Pget
             'video/mp4' => 'mp4',
             // ...可扩展
         ];
-        $this->extension_array = array_values($this->content_type);
-        $this->start_url_host = strtolower(parse_url($this->cfg['--start-url'], PHP_URL_HOST));
+        $this->extensions = array_values($this->content_type);
+        // 起始链接的解析（用属性作传递，避免重复解析）
+        $url_parsed = parse_url($this->cfg['--start-url']);
+        if (!isset($url_parsed['scheme']) || !isset($url_parsed['host'])) {
+            throw new \InvalidArgumentException("Start URL wrong\n");
+        }
+        $this->start_info = $url_parsed;
+        // 起始链接主机名
+        $this->start_info['host'] = strtolower($url_parsed['host']);
+        // 生成主机目录名
+        $this->start_info['host_dir'] = $this->start_info['host'] . (empty($this->start_info['port']) ? '' : '_' . $this->start_info['port']);
+        // 起始链接域名
+        $this->start_info['domain'] = $url_parsed['scheme'] . '://' . $url_parsed['host'] . (isset($url_parsed['port']) ? ':' . $url_parsed['port'] : '') . '/';
+        // 起始链接域名长度
+        $this->start_info['strlen'] = strlen($this->start_info['domain']);
+        $this->start_info['url'] = $this->cfg['--start-url'];
+
         // 若--domains有值，格式化为数组
         if (!empty($this->cfg['--domains'])) {
-            $this->domains = array_filter(array_map('strtolower', array_map('trim', explode(',', $this->cfg['--domains']))));
+            $this->domain_list = array_filter(array_map('strtolower', array_map('trim', explode(',', $this->cfg['--domains']))));
+        }
+        // 过滤配置
+        $this->filter['--reject'] = !empty($this->cfg['--reject']) ? explode(',', $this->cfg['--reject']) : null;
+        $this->filter['--accept'] = !empty($this->cfg['--accept']) ? explode(',', $this->cfg['--accept']) : null;
+        $this->filter['--reject-regex'] = $this->cfg['--reject-regex'];
+        $this->filter['--accept-regex'] = $this->cfg['--accept-regex'];
+    }
+
+    /**
+     * 析构函数，关闭curl句柄和数据库连接
+     */
+    public function __destruct()
+    {
+        unset($this->pending_queue);
+        unset($this->link_table);
+        // 若curl句柄存在，则关闭curl句柄
+        if ($this->curl_handle) {
+            curl_close($this->curl_handle);
+            $this->curl_handle = null;
+        }
+        // 若日志文件句柄存在，则关闭并释放
+        if ($this->log_file_handle && is_resource($this->log_file_handle)) {
+            // 最后写入剩余日志缓存，万一有错误也忽略
+            @fwrite($this->log_file_handle, implode('', $this->log_buffer));
+            fclose($this->log_file_handle);
         }
     }
 
@@ -446,13 +439,12 @@ class Pget
 
         // 检查是否提供了起始URL或输入文件，若都未提供则终止脚本
         if (!$this->cfg['--start-url'] && !$this->cfg['--input-file']) {
-            $this->echo_logs1('Error! No URL');
+            $this->echo_logs('FORCEECHO', 'Error! No URL');
             return false;
         }
-
-        $url_parsed = parse_url($this->cfg['--start-url']);
-        if (!isset($url_parsed['scheme']) || !isset($url_parsed['host'])) {
-            $this->echo_logs1('Error! Invalid URL');
+        // 起始URL格式错误就终止脚本
+        if (!isset($this->start_info['scheme']) || !isset($this->start_info['host'])) {
+            $this->echo_logs('FORCEECHO', 'Error! Invalid URL');
             return false;
         }
 
@@ -468,7 +460,7 @@ class Pget
             $this->recursiveRequest($this->cfg['--start-url']);
         }
         // 输出请求完成信息
-        $this->echo_logs($this->cfg['--start-url'], count($this->link_table) . 'links finished at', date('Y-m-d H:i:s'));
+        $this->echo_logs($this->cfg['--start-url'], $this->link_table->count(), 'Gettings Finished At', date('Y-m-d H:i:s'));
     }
 
     /**
@@ -493,28 +485,27 @@ class Pget
     private function batchRequest($filename)
     {
         $this->echo_logs('Request URLs from file: ', $filename);
-        try {
-            $handle = fopen($filename, 'r');
-            if ($handle) {
-                while (($url = fgets($handle)) !== false) {
-                    $url = trim($url);
-                    if ($url === '') continue;
-                    try {
-                        $this->catcher_reqest_to_local($url);
-                    } catch (\Throwable $e) {
-                        $this->echo_logs($this->loop_count, $url, 'Exception: ' . $e->getMessage());
-                    }
-                    $this->loop_count++;
-                    $this->flush_log_buffer();
-                    if (function_exists('pcntl_signal_dispatch')) pcntl_signal_dispatch();
+
+        $handle = fopen($filename, 'r');
+        if ($handle) {
+            while (($url = fgets($handle)) !== false) {
+                $url = trim($url);
+                if ($url === '') continue;
+                try {
+                    $this->catcher_reqest_to_local($url);
+                } catch (\Throwable $e) {
+                    $this->echo_logs($this->loop_count, $url, 'Exception: ' . $e->getMessage());
                 }
-                fclose($handle);
-            } else {
-                $this->echo_logs($this->loop_count, 'Failed to open input file: ' . $filename);
+                $this->loop_count++;
+                $this->flush_log_buffer();
+                // 检查并处理信号
+                if (function_exists('pcntl_signal_dispatch')) pcntl_signal_dispatch();
             }
-        } catch (\Throwable $e) {
-            $this->echo_logs($this->loop_count, 'File Error: ' . $e->getMessage());
+            fclose($handle);
+        } else {
+            $this->echo_logs($this->loop_count, 'Failed to open input file: ' . $filename);
         }
+
         $this->flush_log_buffer();
     }
 
@@ -527,25 +518,24 @@ class Pget
      */
     private function recursiveRequest($url)
     {
-        // 过滤配置
-        $this->filter['--reject'] = !empty($this->cfg['--reject']) ? explode(',', $this->cfg['--reject']) : null;
-        $this->filter['--accept'] = !empty($this->cfg['--accept']) ? explode(',', $this->cfg['--accept']) : null;
-        $this->filter['--reject-regex'] = $this->cfg['--reject-regex'];
-        $this->filter['--accept-regex'] = $this->cfg['--accept-regex'];
 
+        // 尝试从数据库加载已有数据
+        if (!$this->loadFromDatabase()) {
+            $this->echo_logs('Failed to load data from database.');
+            // 进行冷启动检查，读取本地文件
+            $this->start_once();
+        }
         // 入队起始链接
         if ($this->path_filter_all($url)) {
-            $this->enqueue_url_if_new($url);
+            $this->add_enqueue_if_new($url);
         } else {
             return false;
         }
-        // 若配置了起始URL，则进行冷启动检查
-        $this->start_once($url);
-
         // 主循环
         while (!$this->pending_queue->isEmpty()) {
             // 从队列中取出一个URL
             $url = $this->pending_queue->dequeue();
+
             try {
                 // 调用下载并保存内容的方法
                 $this->catcher_reqest_to_local($url);
@@ -555,24 +545,22 @@ class Pget
             $this->loop_count++;
             // 每一轮操作后写入日志
             $this->flush_log_buffer();
+            // 检查并处理信号
+            if (function_exists('pcntl_signal_dispatch')) pcntl_signal_dispatch();
         }
         // 最后一次日志缓存刷新
         $this->flush_log_buffer();
     }
+
     /* 
      * 首次启动检查数据库文件和本地文件
     */
-    public function start_once($url)
+    public function start_once()
     {
         // 1.遍历存储目录下所有文件，将文件名转换为URL并加入链接表和队列
 
-        $url_parsed = parse_url($url);
-        // 起始网址根目录
-        $start_url_root = $url_parsed['scheme'] . '://' . $url_parsed['host'] . (empty($url_parsed['port']) ? '' : ':' . $url_parsed['port']) . '/';
-        // 生成主机目录名
-        $host_dir = $url_parsed['host'] . (empty($url_parsed['port']) ? '' : '_' . $url_parsed['port']);
         // 生成存储目录路径
-        $storage_dir = rtrim($this->cfg['--directory-prefix'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $host_dir;
+        $storage_dir =  $this->dir_prefix . DIRECTORY_SEPARATOR . $this->start_info['host_dir'];
 
         // 检查存储目录是否存在
         if (is_dir($storage_dir)) {
@@ -585,46 +573,44 @@ class Pget
                 if ($file->isFile()) {
                     // 获取文件的完整路径
                     $file_path = $file->getPathname();
+
                     // 转换本地文件路径为相对路径
                     $relative_path = substr($file_path, strlen($storage_dir));
-
                     // 将目录分隔符替换为斜杠
                     $relative_path = str_replace(DIRECTORY_SEPARATOR, '/', $relative_path);
-                    // 去除相对路径开头的斜杠
-                    if (str_starts_with($relative_path, '/')) {
-                        $relative_path = substr($relative_path, 1);
-                    }
                     // 去除path中的多余的'//'（如有）
                     $relative_path = preg_replace('#(?<!:)//+#', '/', $relative_path);
-                    // 生成对应的URL
-                    $url = $start_url_root . ltrim($relative_path, '/');
-
+                    // 生成对应的完整URL
+                    $url = $this->start_info['domain'] . ltrim($relative_path, '/');
+                    // 标记本地文件对应的URL为true（文件已存在），这个URL不一定是真实的网址，仅用来帮助文件中的相对路径链接
+                    $this->link_table_add_item($url, true);
                     // 去除常见的文件夹索引文件名index,default等
                     $url = preg_replace('/(?:index|default)(?:\.[a-zA-Z0-9]+)?$/', '', $url);
+                    // 如果是自动补全扩展名的模式，则这里把扩展名去除 （暂时去除HTML文件）
+                    if ($this->cfg['--adjust-extension']) {
+                        $url = preg_replace('/\.html$/', '', $url);
+                    }
+                    // 调整后的链接也标记true，避免重复下载
+                    $this->link_table_add_item($url, true);
 
-                    // 查找缓存，或者赋值
-                    $this->enqueue_url_if_new($url);
-                    // 把本地文件对应的链接加入链接表，以跳过再次请求，true ：当前链接对应的文件已存在
-                    $this->link_table[$url][0] = true;
+
+                    // 读取文件内容，处理链接和资源
+                    $result = file_get_contents($file_path);
+                    // 提取页面链接
+                    $links = $this->get_page_links($result, $url);
+                    // 处理页面链接，加入队列,并加入链接表
+                    $this->add_page_links($links);
 
                     // 输出请求日志信息
-                    $this->echo_logs1($file_path, 'File Found');
-
-                    // 读取内容，处理链接和资源
-                    $result = file_get_contents($file_path);
-                    // 若设置了镜像或递归下载，则提取并处理页面链接
-                    if ($this->cfg['--mirror'] || $this->cfg['--recursive']) {
-                        $links = $this->get_page_links($result, $url);
-                        $this->catcher_store_links($links);
-                        $this->echo_logs($file_path,  'Links Saved');
-                    }
+                    $this->echo_logs('FORCEECHO', "{$file_path} -> {$url}",  'Found, Links Add');
                 }
             }
         }
-
         $this->flush_log_buffer();
-
-        $this->echo_logs(count($this->link_table) . ' links found in local storage.' . PHP_EOL);
+        $this->saveLinksToDatabase();
+        unset($rii);
+        unset($file);
+        $this->echo_logs($this->link_table->count(), 'Files Found.' . PHP_EOL);
     }
     /**
      * 下载并保存内容，处理页面资源和链接
@@ -633,138 +619,167 @@ class Pget
      * 3. 处理依赖资源和递归链接
      * 4. 保存到本地
      * 5. 记录到临时表
+     * 6. 为避免频繁的parse_url，故将解析后的数组作为参数传递
      */
     public function catcher_reqest_to_local($url)
     {
-        // 查找缓存，或者赋值
-        $this->enqueue_url_if_new($url);
-
-        // 获取内容截取的起止标记
-        $substr_sign = $this->config->substr_sign;
+        // 检查URL是否需要过滤
+        if (!$this->path_filter_all($url)) {
+            // 若URL被过滤，则输出过滤日志信息并返回
+            $this->echo_logs($this->loop_count, $url, 'Reject');
+            return false;
+        }
 
         if ($this->error_count > $this->cfg['--tries']) {
             // 如果连续错误超过--tries次，则退出循环
-            $this->echo_logs("{$this->error_count} cURL errors, exiting...");
-            throw new \RuntimeException("{$this->error_count} cURL errors, exiting...");
+            $this->echo_logs("{$this->error_count} error tries, exit");
+            throw new \RuntimeException("{$this->error_count} error tries, exit");
         }
 
         // 输出请求日志信息
         $this->echo_logs($this->loop_count, $url, date('Y-m-d H:i:s'), 'Getting');
 
-        // 检查URL是否需要过滤
-        if (!$this->path_filter_all($url)) {
-            // 若URL被过滤，则输出过滤日志信息并返回
-            $this->echo_logs($this->loop_count, $url, 'Rejected, Ignore Request');
-            return false;
-        }
+        // 获取内容截取的起止标记
+        $sub_string_rules = $this->config->sub_string_rules;
 
         // 初始化结果和本地文件路径
-        $result = null;
-        $local_file = null;
+        $result = '';
+        $local_file = '';
+        $local_file_utf8 = '';
+        $is_file_exist = false;
+        $url_parsed = parse_url($url);
 
         // 生成本地保存路径
-        $local_file = $this->url_local_path($url, $this->cfg['--directory-prefix']);
+        $local_file = $this->url_local_path($url, $this->dir_prefix);
+        // 把utf-8编码路径保存备用
+        $local_file_utf8 = $local_file;
+        // 兼容中文路径
+        if ($this->config->isChineseWindows) {
+            $local_file = mb_convert_encoding($local_file, 'GB2312', 'UTF-8');
+        }
         // 本地文件名不存在时跳过
         if (empty($local_file)) return false;
+
         // 检查本地文件是否存在，使用链接表代替实时 file_exists 大批量时影响性能
-        $is_file_exist = empty($this->link_table[$url][0]) ? false : true;
-        // $is_file_exist = file_exists($local_file);
+        $is_file_exist = ($is_file_exist || $this->link_table_get_item($url)) ? true : false;
+
+        // 目录链接处理
+        if (str_ends_with($url, '/')) {
+            $url2 = $url . 'index.html';
+            $is_file_exist = ($is_file_exist || $this->link_table_get_item($url2)) ? true : false;
+        }
+
+        // 自动扩展名的情况处理，假设存在html扩展名
+        if ($this->cfg['--adjust-extension']) {
+            $url3 = $url . 'index.html';
+            $is_file_exist = ($is_file_exist || $this->link_table_get_item($url3)) ? true : false;
+        }
 
         // 判断是否需要重新下载
         if ($is_file_exist && $this->cfg['--no-clobber']) {
-            // 若文件已存在且设置了不覆盖，则读取本地文件内容
-            $this->echo_logs($this->loop_count, $url, $local_file, 'File Exists, Not Request');
-            // 首次启动时已读取过本地文件内容的链接和资源，此处不需要重复读取了
-            return false; // $result = file_get_contents($local_file);
+            $this->echo_logs('FORCEECHO', $this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file_utf8}", 'Exists, Skip');
         } else {
             // 若需要下载，则输出主机IP信息
-            if (!$this->cfg['--no-verbose']) {
-                // 查找缓存，或者赋值
-                $this->link_table_add_urlparsed($url);
-                $url_parsed = $this->link_table[$url];
-                $host = $url_parsed['host'];
-                $ip = gethostbyname($host) ?? null;
-                $this->echo_logs($this->loop_count, "{$host} -> {$ip}");
+            static $host_ip = [];
+            if (isset($host_ip[$url_parsed['host']])) {
+                $ip = $host_ip[$url_parsed['host']];
+            } else {
+                $ip = gethostbyname($url_parsed['host']);
+                $host_ip[$url_parsed['host']] = $ip;
             }
+            $this->echo_logs($this->loop_count, "{$url_parsed['host']} -> {$ip}");
 
+            // 检查URL中非ASCII字符，以便让cURL能够处理
+            if (preg_match('/[^\x20-\x7E]/u', $url)) {
+                $url_getting = encode_url_if_unascii($url_parsed);
+            } else {
+                $url_getting = $url;
+            }
             // 发起网络请求
-            list($result, $http_info) = $this->browser($url);
+            list($result, $http_info) = $this->browser($url_getting);
 
-            // --adjust-extension: 仅对既不是目录也没有扩展名的URL，根据content-type补全扩展名，修正本地文件名
-            if (!empty($this->cfg['--adjust-extension'])) {
+            // --adjust-extension: 仅对既不是目录也没有扩展名的URL，根据content-type补全扩展名
+            if ($this->cfg['--adjust-extension']) {
                 if (empty($http_info['content_type'])) {
-                    $this->echo_logs($this->loop_count, $url, 'content_type Null');
                     $http_info['content_type'] = 'text/html';
                 }
-                // 判断本地文件是否为目录
-                $is_dir = str_ends_with($local_file, DIRECTORY_SEPARATOR);
+                // 根据响应的content-type获取扩展名
+                $content_type = $this->get_ext_by_content_type($http_info['content_type']);
+                // 判断本地文件是否为目录，经过url_local_path处理过，目录结尾是index.html，所以此处不可能是/结尾
                 // 判断本地文件名是否有扩展名
                 $has_ext = false;
-                foreach ($this->extension_array as $i) {
+                foreach ($this->extensions as $i) {
                     if (str_ends_with($local_file, $i)) {
                         $has_ext = true;
                         break;
                     }
                 }
-                // 根据响应的content-type获取扩展名
-                $content_type_ext = $this->get_ext_by_content_type($http_info['content_type']);
                 // 若不是目录且没有扩展名，且能获取到扩展名，则补全扩展名
-                if (!$is_dir && !$has_ext && $content_type_ext) {
-                    $local_file .= '.' . $content_type_ext;
-                    // 检查补全扩展名后的文件是否存在
-                    $is_file_exist = empty($this->link_table[$url][0]) ? false : true;
-                    // $is_file_exist = file_exists($local_file);
+                if (!$has_ext && $content_type) {
+                    $url4 = $url . '.' . $content_type;
+                    $local_file .= '.' . $content_type;
+                    $local_file_utf8 .= '.' . $content_type;
+                    // 再次检查检查本地文件是否存在
+                    $is_file_exist = ($is_file_exist || $this->link_table_get_item($url4)) ? true : false;
                 }
             }
-        }
 
-        // 若响应内容为空，则输出日志信息并返回
-        if (empty($result)) {
-            $this->echo_logs($this->loop_count, $url, 'Response Null');
-            return false;
-        }
-        // 若设置了转换为UTF-8编码，则进行编码转换
-        if ($this->cfg['--utf-8']) {
-            $result = $this->mb_encode($result);
-        }
-        // 若设置了镜像或递归下载，则提取并处理页面链接
-        if ($this->cfg['--mirror'] || $this->cfg['--recursive']) {
-            $links = $this->get_page_links($result, $url);
-            $this->catcher_store_links($links);
-            $this->echo_logs($this->loop_count, $url,  'Links Saved');
-        }
-        // 若设置了内容截取，则进行内容截取
-        if (!empty($this->cfg['--sub-string'])) {
-            $result = $this->sub_content_all($result, $substr_sign);
-            $this->echo_logs($this->loop_count, $url,  'Response Cut');
-        }
-        // 若截取后的内容为空，则返回
-        if (empty($result)) {
-            return false;
-        }
+            // 若响应内容为空，则输出日志信息并返回
+            if (empty($result)) {
+                $this->echo_logs($this->loop_count, $url, 'Response Null');
+                return false;
+            }
+            // 若设置了转换为UTF-8编码，则进行编码转换
+            if ($this->cfg['--utf-8']) {
+                $result = $this->mb_encode($result);
+            }
+            // 若设置了镜像或递归下载，则提取并处理页面链接
+            if ($this->cfg['--mirror'] || $this->cfg['--recursive']) {
+                $links = $this->get_page_links($result, $url);
+                $this->add_page_links($links);
+                $this->echo_logs($this->loop_count, $url,  'Links Add');
+            }
+            // 若设置了内容截取，则进行内容截取
+            if (!empty($this->cfg['--sub-string'])) {
+                $result = $this->sub_content_all($result, $sub_string_rules);
+                $this->echo_logs($this->loop_count, $url,  'Response Cut');
+            }
+            // 若截取后的内容为空，则返回
+            if (empty($result)) {
+                return false;
+            }
 
-        // 判断是否需要保存文件。上方有 --adjust-extension 添加扩展名导致 is_file_exist 被修正的情况，故需要再次判断
-        if ($is_file_exist && $this->cfg['--no-clobber']) {
-            // 若文件存在且设置不覆盖，提示文件已存在，不进行覆盖
-            $this->echo_logs1($this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file}", 'File Existed, Not Overwrite');
-        } else {
+
             // 否则，保存文件
             try {
                 // 获取本地文件所在目录
                 $local_dir = dirname($local_file);
                 // 若目录不存在，则创建目录
-                if (!is_dir($local_dir) && !mkdir($local_dir, 0777, true)) {
-                    $this->echo_logs($this->loop_count, 'Failed to create directory: ' . $local_dir);
-                    return false;
+                static $dir_cache = [];
+                if (!isset($dir_cache[$local_dir])) {
+                    if (!is_dir($local_dir) && !mkdir($local_dir, 0777, true)) {
+                        throw new \Exception('Failed to create directory: ' . $local_dir);
+                        return false;
+                    }
+                    $dir_cache[$local_dir] = true;
                 }
-                if (@file_put_contents($local_file, $result) === false) {
-                    $this->echo_logs($this->loop_count, 'Failed to write file: ' . $local_file);
+                // 判断是否需要保存文件。上方有 --adjust-extension 添加扩展名导致 is_file_exist 被修正的情况，故需要再次判断
+                if ($is_file_exist && $this->cfg['--no-clobber']) {
+                    $this->echo_logs($this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file_utf8}", 'Unwrite');
+                } elseif (@file_put_contents($local_file, $result) === false) {
+                    throw new \Exception('Failed to write file: ' . $local_file);
                     // 写入失败则返回false
                     return false;
                 }
                 // 到这步表明文件已存在，则将链接表中记录值改为 true 
-                $this->link_table[$url][0] = true;
-                $this->echo_logs1($this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file}", 'File Saved');
+                // 在链接表中设置true
+                $this->link_table_add_item($url, true);
+                // 原URL也设置为true
+                if (isset($url2)) $this->link_table_add_item($url2, true);
+                if (isset($url3)) $this->link_table_add_item($url3, true);
+                if (isset($url4)) $this->link_table_add_item($url4, true);
+
+                $this->echo_logs('FORCEECHO', $this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file_utf8}", 'Saved');
             } catch (\Throwable $e) {
                 $this->echo_logs($this->loop_count, $url, 'File Exception: ' . $e->getMessage());
                 return false;
@@ -773,6 +788,7 @@ class Pget
 
         // 若设置了操作间隔时间，则进行等待
         if ($this->cfg['--wait']) {
+            $this->echo_logs('Waiting ' . $this->cfg['--wait'] . ' seconds');
             $this->wait($this->cfg['--wait']);
         }
 
@@ -783,7 +799,7 @@ class Pget
      * 链接入队（去重）
      * 将新发现的链接加入待处理队列
      */
-    public function catcher_store_links($links)
+    public function add_page_links($links)
     {
         // 若链接数组为空，则返回
         if (empty($links)) {
@@ -796,58 +812,32 @@ class Pget
                 continue;
             }
             // 若链接未处理过，且是允许的链接，则加入链接表和队列
-            $this->enqueue_url_if_new($url);
+            $this->add_enqueue_if_new($url);
         }
     }
 
-    // 在类属性区添加主机信息池
-    private array $host_info_pool = [];
-    // 查找缓存，或者赋值
-    private function link_table_add_urlparsed($url)
+    // 新链接入队和链接表
+    private function add_enqueue_if_new($url)
     {
-        // 链接表检查，或者赋值
-        if (!isset($this->link_table[$url]) || !is_array($this->link_table[$url])) {
-            $this->link_table[$url] = [];
-        }
-        if (!isset($this->link_table[$url]['host'])) {
-            $parselurlArr = parse_url($url);
-            $scheme = $parselurlArr['scheme'] ?? '';
-            $host = $parselurlArr['host'] ?? '';
-            $port = isset($parselurlArr['port']) ? ':' . $parselurlArr['port'] : '';
-            // 生成唯一key
-            $key = strtolower($scheme . '://' . $host . $port);
-            // 主机信息池只存一份
-            if (!isset($this->host_info_pool[$key])) {
-                $this->host_info_pool[$key] = [
-                    'scheme' => $scheme,
-                    'host'   => $host,
-                    'port'   => $port,
-                ];
-            }
-            // 直接引用主池字段，避免重复
-            $this->link_table[$url]['scheme'] = &$this->host_info_pool[$key]['scheme'];
-            $this->link_table[$url]['host']   = &$this->host_info_pool[$key]['host'];
-            $this->link_table[$url]['port']   = &$this->host_info_pool[$key]['port'];
-            // 其它字段正常赋值
-            foreach ($parselurlArr as $k => $v) {
-                if (!in_array($k, ['scheme', 'host', 'port'])) {
-                    $this->link_table[$url][$k] = $v;
-                }
-            }
-        }
-    }
-
-    // 统一处理初始化和入队
-    private function enqueue_url_if_new($url)
-    {
-        // 链接表检查，或者赋值
-        if (!isset($this->link_table[$url]) || !is_array($this->link_table[$url])) {
-            $this->link_table[$url] = [];
-        }
-        if (!isset($this->link_table[$url][0])) {
-            $this->link_table[$url][0] = false; // 链接对应的本地文件不存在
+        $url_encode = rawurlencode(rawurldecode($url));
+        if ($this->link_table->getItem($url_encode) === null) {
+            // $this->link_table->addItem($url_encode, false); // 新链接加入队列而不加入链接表
             $this->pending_queue->enqueue($url);
+            $this->saveLinksToDatabase($url); // 保存到日志
         }
+    }
+    // 统一处理链接表入表
+    private function link_table_add_item($url, bool $value)
+    {
+        $url_encode = rawurlencode(rawurldecode($url));
+        $this->link_table->addItem($url_encode, $value);
+        $this->saveLinksToDatabase($url, (int)$value); // 保存到日志
+    }
+    // 统一处理链接表取值
+    private function link_table_get_item($url)
+    {
+        $url_encode = rawurlencode(rawurldecode($url));
+        return $this->link_table->getItem($url_encode);
     }
     /**
      * 日志输出
@@ -856,39 +846,28 @@ class Pget
      */
     public function echo_logs(...$args)
     {
-
+        $stdout = true;
         // 若配置了--no-verbose，则不输出日志信息
-        if ($this->cfg['--no-verbose']) return false;
-
-        // 构建日志信息
-        $log_message = implode("\t", $args) . PHP_EOL;
-        // 若配置了输出到文件，则写入缓存
-        if ($this->cfg['--output-file']) {
-            $this->log_buffer[] = $log_message;
-        } else {
-            // 否则输出到控制台
-            echo $log_message;
+        if ($this->cfg['--no-verbose']) {
+            $stdout = false;
+        }
+        if ($args[0] === 'FORCEECHO') {
+            $stdout = true;
+            array_shift($args);
+        }
+        if ($stdout) {
+            // 构建日志信息
+            $log_message = implode("\t", $args) . PHP_EOL;
+            // 若配置了输出到文件，则写入缓存
+            if ($this->cfg['--output-file']) {
+                $this->log_buffer[] = $log_message;
+            } else {
+                // 否则输出到控制台
+                echo $log_message;
+            }
         }
     }
-    /**
-     * 日志输出
-     * 忽略--no-verbose
-     * 输出日志信息到控制台或文件
-     */
-    public function echo_logs1(...$args)
-    {
 
-
-        // 构建日志信息
-        $log_message = implode("\t", $args) . PHP_EOL;
-        // 若配置了输出到文件，则写入缓存
-        if ($this->cfg['--output-file']) {
-            $this->log_buffer[] = $log_message;
-        } else {
-            // 否则输出到控制台
-            echo $log_message;
-        }
-    }
     /**
      * 日志缓存写入文件
      */
@@ -899,43 +878,7 @@ class Pget
             $this->log_buffer = [];
         }
     }
-    /**
-     * 检查主机是否允许访问（--span-hosts + --domains 联合作用）
-     * @param string $url
-     * @return bool
-     */
-    private function is_host_allowed($url)
-    {
-        // 默认只允许当前主域名下的链接，除非--span-hosts为真
-        if (empty($this->cfg['--span-hosts'])) {
-            // 查找缓存，或者赋值
-            $this->link_table_add_urlparsed($url);
-            $url_parsed = $this->link_table[$url];
-            $url_host = $url_parsed['host'];
-            // 若URL的主机名与起始URL的主机名不一致，则过滤掉该链接
-            if (strtolower($url_host) !== $this->start_url_host) {
-                return $this->link_table[$url][1] = false;
-            }
-        } else {
-            // --span-hosts为真时，才启用--domains白名单过滤。只要 domains 数组中任意一个元素被包含在当前 URL 的主机名中（字符串包含关系），就允许访问
-            if (!empty($this->cfg['--domains'])) {
-                $this->link_table_add_urlparsed($url);
-                $url_parsed = $this->link_table[$url];
-                $url_host = strtolower($url_parsed['host']);
-                $allowed = false;
-                foreach ($this->domains as $domain) {
-                    if (strpos($url_host, $domain) !== false) {
-                        $allowed = true;
-                        break;
-                    }
-                }
-                if (!$allowed) {
-                    return $this->link_table[$url][1] = false;
-                }
-            }
-        }
-        return true;
-    }
+
     /**
      * 过滤：总入口
      * 1. 默认只允许当前主域名下链接（除非--span-hosts）
@@ -944,36 +887,57 @@ class Pget
      */
     public function path_filter_all($url)
     {
-        // 若路径为空，则直接返回false
         if (empty($url)) {
             return false;
         }
-        // 默认过滤掉包含"javascript:"和"#"的链接
         if (str_starts_with($url, 'javascript:') || str_starts_with($url, '#') || str_starts_with($url, 'data:')) {
             return false;
         }
-        // 主机列表检查，要在路径过滤前面
         if (!$this->is_host_allowed($url)) {
             return false;
         }
-        // 链接表检查，或者赋值
-        if (!isset($this->link_table[$url]) || !is_array($this->link_table[$url])) {
-            $this->link_table[$url] = [];
-        }
-        // 查找缓存，若路径已在缓存中，则直接返回缓存结果
-        if (isset($this->link_table[$url][1])) {
-            return $this->link_table[$url][1];
-        }
-        // 进行后缀过滤
         if (!$this->path_filter_suffix($url)) {
-            return $this->link_table[$url][1] = false;
+            return false;
         }
-        // 进行正则过滤
         if (!$this->path_filter_preg($url)) {
-            return $this->link_table[$url][1] = false;
+            return false;
         }
-        // 若通过所有过滤，则缓存true
-        return $this->link_table[$url][1] = true;
+        return true;
+    }
+    /**
+     * 检查主机是否允许访问（--span-hosts + --domains 联合作用）
+     * @param string $url
+     * @return bool
+     */
+    private function is_host_allowed($url)
+    {
+        if (is_array($url)) {
+            $url_parsed = $url;
+        } else {
+            $url_parsed = parse_url($url);
+        }
+        $url_host = strtolower($url_parsed['host']);
+        // 默认只允许当前主域名下的链接，除非--span-hosts为真
+        if (empty($this->cfg['--span-hosts'])) {
+            if ($url_host !== $this->start_info['host']) {
+                return false;
+            }
+        } else {
+            // --span-hosts为真时，才启用--domains白名单过滤。只要 domains 数组中任意一个元素被包含在当前 URL 的主机名中（字符串包含关系），就允许访问
+            if (!empty($this->cfg['--domains'])) {
+                $allowed = false;
+                foreach ($this->domain_list as $domain) {
+                    if (strpos($url_host, strtolower($domain)) !== false) {
+                        $allowed = true;
+                        break;
+                    }
+                }
+                if (!$allowed) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -1058,7 +1022,7 @@ class Pget
         }
         // 遍历链接数组
         foreach ($unique_links as $path) {
-            // 过滤掉以"data:"开头的链接
+            // 过滤掉以"data:"开头的非正常链接
             if (str_starts_with($path, 'data:')) {
                 continue;
             }
@@ -1076,91 +1040,75 @@ class Pget
 
     /**
      * 生成本地保存路径
+     * @param url 传入链接或者parse_url解析后的数组
      * 目录名包含端口号，兼容Win/Linux，支持特殊字符转义
-     * 由于链接表里不重复，所以url_local_path几乎不会重复调用
      */
-    public function url_local_path($url, $base_dir = '')
+    public function url_local_path($url, $dir_prefix)
     {
         if (empty($url)) {
             return '';
         }
-
-        // 解析URL
-        // 查找缓存，或者赋值
-        $this->link_table_add_urlparsed($url);
-        $url_parsed = $this->link_table[$url];
-        // 获取URL的路径部分，若为空则默认为根路径
+        // 数组的话直接利用
+        if (is_array($url)) {
+            $url_parsed = $url;
+        } else {
+            $url_parsed = parse_url($url);
+        }
         $path = $url_parsed['path'] ?? '/';
-
         // 递归深度判断（基于目录层级）
         if (!empty($this->cfg['--level'])) {
             $depth = 0;
             if ($path !== '') {
-                // 去除首尾斜杠，避免空目录
                 $trimmed = trim($path, '/');
                 if ($trimmed !== '') {
                     $depth = substr_count($trimmed, '/');
                 }
             }
             if ($depth > $this->cfg['--level']) {
-                // 超过最大深度，直接返回空路径，调用方可据此跳过
                 $this->echo_logs($this->loop_count, $url, 'Max depth exceeded, skip.');
                 return '';
             }
         }
-        // 若路径以斜杠结尾，则添加index.html
         if (str_ends_with($path, '/')) {
             $path = $path . 'index.html';
         }
-        // 获取URL的查询参数，并将斜杠 / 替换为下划线_
-        $query = empty($url_parsed['query']) ? '' : '?' . str_replace('/', '_', $url_parsed['query']);
-        // 拼接文件路径和查询参数
-        $file_path = $path . $query;
-        // 为保持windows和Linux兼容，替换特殊字符，包括? * : " < > | \，斜杠 / 已在请求字符中过滤
+        $query = empty($url_parsed['query']) ? '' : '_' . $url_parsed['query'];
+        // query中的路径分隔符替换成%2F
+        $query = str_replace('/', '%2F', rawurldecode($query));
+        $file_path = rawurldecode($path) . $query;
         $file_path = str_replace(['?', '*', ':', '"', '<', '>', '|', '\\'], '_', $file_path);
-
-        // 若设置了转义非ASCII和特殊字符，则进行URL编码。但不专一路径分隔符/
+        $file_path = ltrim($file_path, '/');
         if (!empty($this->cfg['--restrict-file-names'])) {
-            $file_path = rawurldecode($file_path);
-            $file_path = encode_path($file_path);
+            $file_path = str_replace('/', '[SLASH]', $file_path);
+            $file_path = rawurlencode($file_path);
+            $file_path = str_replace('[SLASH]', '/', $file_path);
         }
-
-        // 若为Windows系统，将斜杠替换为目录分隔符
         if ($this->config->isWindows) {
             $file_path = str_replace('/', DIRECTORY_SEPARATOR, $file_path);
-            if ($base_dir) {
-                $base_dir = str_replace('/', DIRECTORY_SEPARATOR, $base_dir);
-                $base_dir = rtrim($base_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-            }
+            /*             
+            // dir_prefix 中的分隔符应在传入前兼容windows，避免重复的判断
+            if ($dir_prefix) {
+                $dir_prefix = str_replace('/', DIRECTORY_SEPARATOR, $dir_prefix);
+                $dir_prefix = rtrim($dir_prefix, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+            } 
+            */
         }
-
-        // 目录名加端口
         $host_dir = $url_parsed['host'] . (empty($url_parsed['port']) ? '' : '_' . $url_parsed['port']);
-        // 拼接本地文件路径
-        $local_file = $base_dir . $host_dir . $file_path;
-
-        // 处理中文Windows系统的编码问题
-        if ($this->config->isChineseWindows) {
-            $local_file = mb_convert_encoding($local_file, 'GB2312', 'UTF-8');
-        }
-
-
-        // 缓存结果
-        return $local_file;
+        return $dir_prefix . DIRECTORY_SEPARATOR . $host_dir . DIRECTORY_SEPARATOR . $file_path;
     }
 
     /**
      * 多段内容截取
      * 支持多组起止标记批量截取
      */
-    public function sub_content_all($html, $substr_sign = [])
+    public function sub_content_all($html, $sub_string_rules = [])
     {
         // 若起止标记数组为空，则返回原始HTML内容
-        if (is_multi_array_empty($substr_sign)) {
+        if (is_multi_array_empty($sub_string_rules)) {
             return $html;
         }
         // 解包起止标记数组
-        list($start, $end) = $substr_sign;
+        list($start, $end) = $sub_string_rules;
         $html_tmp = '';
         // 遍历起止标记数组
         for ($i = 0; $i < count($start); $i++) {
@@ -1217,7 +1165,6 @@ class Pget
      * 网络请求，支持GET/POST/HEAD
      * 支持自定义User-Agent、Header、Cookie、SSL等
      */
-    private $curl_handle = null;
     public function browser($url, $method = 'GET', $postfields = [])
     {
         // 若URL为空，则返回false和空数组
@@ -1257,11 +1204,7 @@ class Pget
         // 设置User-Agent
         curl_setopt($ch, CURLOPT_USERAGENT, $ua);
 
-        // 查找缓存，或者赋值
-        $this->link_table_add_urlparsed($url);
-        $url_parsed = $this->link_table[$url];
-        // 自动判断http/https
-        $scheme = strtolower($url_parsed['scheme'] ?? '');
+        $scheme = strtolower(parse_url($url, PHP_URL_SCHEME) ?? '');
         if ($scheme === 'https') {
             // 根据配置选项决定是否验证SSL证书
             if ($this->cfg['--no-check-certificate']) {
@@ -1295,7 +1238,7 @@ class Pget
         // cookie文件处理，仅当--save-cookies或者--load-cookies有值时启用cookie，因为程序把读取和写入cookie放在同一个文件，不要配置成不同的文件名
         if (!empty($this->cfg['--save-cookies'])) {
             // 生成cookie文件路径
-            $cookiejar = $this->cfg['--directory-prefix'] . DIRECTORY_SEPARATOR . $this->cfg['--save-cookies'];
+            $cookiejar = $this->dir_prefix . DIRECTORY_SEPARATOR . $this->cfg['--save-cookies'];
             // 设置cookie文件
             curl_setopt($ch, CURLOPT_COOKIEJAR, $cookiejar);
             curl_setopt($ch, CURLOPT_COOKIEFILE, $cookiejar);
@@ -1353,24 +1296,6 @@ class Pget
         // 输出HTTP请求发送日志信息
         $this->echo_logs($this->loop_count, $url, 'HTTP Requested');
         return [$response, $http_info];
-    }
-
-    /**
-     * 析构函数，关闭curl句柄和数据库连接
-     */
-    public function __destruct()
-    {
-        // 若curl句柄存在，则关闭curl句柄
-        if ($this->curl_handle) {
-            curl_close($this->curl_handle);
-            $this->curl_handle = null;
-        }
-        // 若日志文件句柄存在，则关闭并释放
-        if ($this->log_file_handle && is_resource($this->log_file_handle)) {
-            // 最后写入剩余日志缓存，万一有错误也忽略
-            @fwrite($this->log_file_handle, implode('', $this->log_buffer));
-            fclose($this->log_file_handle);
-        }
     }
 
     /**
@@ -1433,10 +1358,7 @@ class Pget
         if (empty($url)) return '';
         if (empty($path)) return $url;
 
-        // 查找缓存，或者赋值
-        $this->link_table_add_urlparsed($url);
-        $url_parsed = $this->link_table[$url];
-
+        $url_parsed = parse_url($url);
         $scheme = $url_parsed['scheme'] ?? '';
         $host = $url_parsed['host'] ?? '';
         $port = isset($url_parsed['port']) ? ':' . $url_parsed['port'] : '';
@@ -1444,38 +1366,27 @@ class Pget
             return '';
         }
 
-        // 解析提供的当前URL，以 / 开始相对路径的网页可能占比较大，所以在http前
-        // path以//开头，则拼接协议，处理//必须在/前
         if (str_starts_with($path, '//')) {
             return "{$scheme}:{$path}";
         }
-        // path以/开头，则拼接协议、主机名和端口
         if (str_starts_with($path, '/')) {
             return "{$scheme}://{$host}{$port}{$path}";
         }
-        // 若是以http或ftp开头的URL，则直接返回
         if (str_starts_with($path, 'http') || str_starts_with($path, 'ftp')) {
             return $path;
         }
-
-        // 剩余的情况是 . .. 相对路径或者其它协议
-
         // 到这步若path包含协议头，说明不是支持的协议，则直接返回空
         if (stripos(substr($path, 0, 20), '://') !== false) {
             return '';
         }
-
-        // 获取当前URL目录名，生成绝对URL
         $dirname = str_ends_with($url, '/') ? $url : dirname($url) . '/';
-
-        // 缓存结果，避免重复计算
         static $get_absolute_url_cache = [];
         $key = $dirname . $path;
         if (isset($get_absolute_url_cache[$key])) {
             return $get_absolute_url_cache[$key];
         }
-
         return $get_absolute_url_cache[$key] = $this->get_standard_url($dirname . $path);
+        return $this->get_standard_url($dirname . $path);
     }
 
     /**
@@ -1517,18 +1428,351 @@ class Pget
         // 根据content-type获取对应的扩展名
         return $this->content_type[$type] ?? null;
     }
-}
+    /**
+     * 将链接记录到 SQLite 数据库中（支持批量缓存+定时/定量提交）
+     *
+     * @param mixed $urls        一条链接字符串或链接数组。若为空则强制刷新缓冲区。
+     * @param int|null $use     状态：
+     *                           - -1: 插入时不替换旧数据（仅插入新数据）
+     *                           - 0/1: 插入或替换旧数据
+     * @param bool $batch        是否启用批量缓存，默认 true
+     *
+     * 示例调用：
+     *   saveLinksToDatabase(); // 强制刷新缓冲区
+     *   saveLinksToDatabase('http://example.com', -1); // 只添加新记录，不覆盖
+     *   saveLinksToDatabase(['url1', 'url2'], 1); // 添加并替换旧记录
+     */
+    public function saveLinksToDatabase($urls = null, ?int $use = -1, bool $batch = true): void
+    {
+        if (!extension_loaded('pdo_sqlite')) return;
 
+        // 构建数据库路径
+        $dbPath = $this->dir_prefix . DIRECTORY_SEPARATOR . 'pget_' . $this->start_info['host_dir'] . '.db';
+
+        try {
+            // 使用静态变量缓存 PDO 连接
+            static $pdo = null;
+            static $tableInitialized = false;
+
+            if ($pdo === null) {
+                // 第一次连接数据库（如果文件不存在会自动创建）
+                $pdo = new \PDO("sqlite:$dbPath");
+                $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+            }
+
+            if (!$tableInitialized) {
+                // 创建 logs 表（如果不存在）
+                $pdo->exec("CREATE TABLE IF NOT EXISTS logs (url TEXT PRIMARY KEY UNIQUE NOT NULL, use_status INTEGER NOT NULL)");
+                $tableInitialized = true;
+            }
+
+            // 批量模式下使用缓冲区
+            if ($batch) {
+                // 初始化缓冲区
+                static $urlBuffer = [];
+                static $lastCommitTime = 0;
+
+                // 如果没有传入 urls，则立即刷新缓冲区并返回
+                if ($urls === null) {
+                    if (!empty($urlBuffer)) {
+                        $pdo->beginTransaction();
+
+                        $ignoreUrls = [];
+                        $replaceUrls = [];
+
+                        foreach ($urlBuffer as $url => $status) {
+                            if ($status === -1) {
+                                $ignoreUrls[] = $url;
+                            } else {
+                                $replaceUrls[] = ['url' => $url, 'use_status' => $status];
+                            }
+                        }
+
+                        // 插入 use=-1 的记录（忽略已存在）
+                        if (!empty($ignoreUrls)) {
+                            $stmtIgnore = $pdo->prepare("INSERT OR IGNORE INTO logs (url, use_status) VALUES (?, -1)");
+                            foreach ($ignoreUrls as $url) {
+                                $stmtIgnore->execute([$url]);
+                            }
+                        }
+
+                        // 插入 use=0/1 的记录（替换旧值）
+                        if (!empty($replaceUrls)) {
+                            $stmtReplace = $pdo->prepare("INSERT OR REPLACE INTO logs (url, use_status) VALUES (?, ?)");
+                            foreach ($replaceUrls as $item) {
+                                $stmtReplace->execute([$item['url'], $item['use_status']]);
+                            }
+                        }
+
+                        $pdo->commit();
+                        $this->echo_logs(count($urlBuffer), "URL(s) batch saved to database.");
+                        $urlBuffer = []; // 清空缓冲区
+                        $lastCommitTime = microtime(true); // 更新最后提交时间
+                    }
+                    return;
+                }
+
+                // 合并传入的URL到缓冲区
+                if (is_string($urls)) {
+                    if ($use === -1) {
+                        // use=-1时，仅当url不在buffer中才添加
+                        if (!array_key_exists($urls, $urlBuffer)) {
+                            $urlBuffer[$urls] = -1;
+                        }
+                    } else {
+                        // 其他情况正常替换
+                        $urlBuffer[$urls] = $use;
+                    }
+                } elseif (is_array($urls)) {
+                    foreach ($urls as $url) {
+                        if ($use === -1) {
+                            if (!array_key_exists($url, $urlBuffer)) {
+                                $urlBuffer[$url] = -1;
+                            }
+                        } else {
+                            $urlBuffer[$url] = $use;
+                        }
+                    }
+                }
+
+                $currentTime = microtime(true);
+
+                // 检查是否满足提交条件
+                if (count($urlBuffer) >= 500 || ($lastCommitTime && ($currentTime - $lastCommitTime) >= 300)) {
+                    $pdo->beginTransaction();
+
+                    $ignoreUrls = [];
+                    $replaceUrls = [];
+
+                    foreach ($urlBuffer as $url => $status) {
+                        if ($status === -1) {
+                            $ignoreUrls[] = $url;
+                        } else {
+                            $replaceUrls[] = ['url' => $url, 'use_status' => $status];
+                        }
+                    }
+
+                    // 插入 use=-1 的记录（忽略已存在）
+                    if (!empty($ignoreUrls)) {
+                        $stmtIgnore = $pdo->prepare("INSERT OR IGNORE INTO logs (url, use_status) VALUES (?, -1)");
+                        foreach ($ignoreUrls as $url) {
+                            $stmtIgnore->execute([$url]);
+                        }
+                    }
+
+                    // 插入 use=0/1 的记录（替换旧值）
+                    if (!empty($replaceUrls)) {
+                        $stmtReplace = $pdo->prepare("INSERT OR REPLACE INTO logs (url, use_status) VALUES (?, ?)");
+                        foreach ($replaceUrls as $item) {
+                            $stmtReplace->execute([$item['url'], $item['use_status']]);
+                        }
+                    }
+
+                    $pdo->commit();
+                    $this->echo_logs(count($urlBuffer), "URL(s) batch saved to database.");
+                    $urlBuffer = []; // 清空缓冲区
+                    $lastCommitTime = $currentTime; // 更新最后提交时间
+                }
+            } else {
+                // 非批量模式，立即写入数据库
+                if ($urls === null) {
+                    return; // 不传入 urls 时非批量模式无意义
+                }
+
+                $pdo->beginTransaction();
+
+                if (is_string($urls)) {
+                    $urls = [$urls];
+                }
+
+                if ($use === -1) {
+                    // 插入 use=-1，忽略已有记录
+                    $stmt = $pdo->prepare("INSERT OR IGNORE INTO logs (url, use_status) VALUES (?, -1)");
+                    foreach ($urls as $url) {
+                        $stmt->execute([$url]);
+                    }
+                } else {
+                    // 插入 use=0/1，替换旧记录
+                    $stmt = $pdo->prepare("INSERT OR REPLACE INTO logs (url, use_status) VALUES (?, ?)");
+                    foreach ($urls as $url) {
+                        $stmt->execute([$url, $use]);
+                    }
+                }
+
+                $pdo->commit();
+            }
+        } catch (\PDOException $e) {
+            if (isset($pdo) && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $this->echo_logs("Database error: " . $e->getMessage());
+        }
+    }
+    /**
+     * 从 SQLite 数据库加载数据
+     * 将 use_status = 0 或 1 的记录加入 link_table
+     * 将 use_status = -1 的记录加入 pending_queue
+     * 成功返回 true，失败返回 false
+     */
+    public function loadFromDatabase(): bool
+    {
+        if (!extension_loaded('pdo_sqlite')) return false;
+        // 构建数据库路径
+        $dbPath = $this->dir_prefix . DIRECTORY_SEPARATOR . 'pget_' . $this->start_info['host_dir'] . '.db';
+
+        // 检查数据库文件是否存在
+        if (!file_exists($dbPath)) {
+            $this->echo_logs('Database file not found:', $dbPath);
+            return false;
+        }
+
+        try {
+            // 连接数据库
+            $pdo = new \PDO("sqlite:$dbPath");
+            $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+            // 查询 logs 表中的所有数据
+            $stmt = $pdo->query("SELECT url, use_status FROM logs");
+
+            if (!$stmt) {
+                $this->echo_logs('Failed to query database.');
+                return false;
+            }
+
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            if (empty($rows)) {
+                $this->echo_logs('No records found in the database.');
+                return false; // 数据库为空返回 false
+            }
+
+            foreach ($rows as $row) {
+                $url = $row['url'];
+                $status = $row['use_status'];
+
+                if ($status === 1) {
+                    // 加入 link_table，本地文件已存在
+                    $this->link_table_add_item($url, true);
+                } elseif ($status === -1) {
+                    // 添加到 pending_queue，URL待处理
+                    $this->pending_queue->enqueue($url);
+                }
+            }
+
+            $this->echo_logs(count($rows), ' records loaded from database.');
+            return true;
+        } catch (\PDOException $e) {
+            $this->echo_logs('Database error during loading:', $e->getMessage());
+            return false;
+        }
+    }
+}
+// =================== 分片存储 ===================
+/* 
+ * 数组分片存储类
+ * 默认将数据均匀分配到256个子数组中存储
+ */
+class ArraySharder
+{
+    // 存储所有分片的数组
+    private $shards = [];
+
+    // 分片前缀
+    const SHARD_PREFIX = 'shard_';
+
+    public function __construct()
+    {
+        // 初始化256个分片数组 (00-FF)
+        for ($i = 0; $i < 256; $i++) {
+
+            $shardName = self::SHARD_PREFIX . $i;
+            $this->shards[$shardName] = [];
+        }
+    }
+
+    // 核心分片函数 (基于crc32)
+    public function getShardName(string $input): string
+    {
+        return self::SHARD_PREFIX . (crc32($input) & 0xFF); // substr(hash("crc32b", $input), 0, 2);
+    }
+
+    // 获取分片引用 (直接操作)
+    public function &getShard(string $input): array
+    {
+        $shardName = $this->getShardName($input);
+        if (!isset($this->shards[$shardName])) {
+            $this->shards[$shardName] = [];
+        }
+        return $this->shards[$shardName];
+    }
+
+    // 添加键值对到分片
+    public function addItem(string $input, mixed $data): void
+    {
+        $shard = &$this->getShard($input);
+        $shard[$input] = $data;
+    }
+
+    // 获取键值对数据
+    public function getItem(string $input): mixed
+    {
+        $shard = $this->getShard($input);
+        return $shard[$input] ?? null;
+    }
+
+    // 删除键值对
+    public function removeItem(string $input): bool
+    {
+        $shard = &$this->getShard($input);
+
+        if (isset($shard[$input])) {
+            unset($shard[$input]);
+            return true;
+        }
+
+        return false;
+    }
+
+    // 获取所有分片统计
+    public function getStats(): array
+    {
+        $stats = [];
+        foreach ($this->shards as $name => $data) {
+            $stats[$name] = count($data);
+        }
+        return $stats;
+    }
+
+    // 获取总数量
+    public function count()
+    {
+        return array_sum($this->getStats());
+    }
+
+    // 调试
+    public function debug()
+    {
+        print_r($this->shards);
+        echo "[DEBUG] 已有 shardName 列表:\n";
+        foreach (array_keys($this->shards) as $name) {
+            echo "  - {$name}\n";
+        }
+        // 你也可以输出 $this->shards 的数量
+        echo "[DEBUG] 当前 shards 总数: " . $this->count() . "\n";
+    }
+}
 // =================== 工具函数 ===================
 
 /**
  * 编码URL路径部分，保留路径分隔符/
  */
-function encode_path($path)
+function url_encode($url)
 {
-    $segments = explode('/', $path);
-    $encodedSegments = array_map('rawurlencode', $segments);
-    return implode('/', $encodedSegments);
+    // 快速检测整个URL是否包含非ASCII字符
+    if (!preg_match('/[^\x00-\x7F]/', $url)) {
+        return $url; // 全部为ASCII字符，直接返回
+    }
+    return encode_url_if_unascii($url);
 }
 /**
  * 判断多维数组是否为空
@@ -1550,13 +1794,105 @@ function is_multi_array_empty($value)
     // 判断非数组元素是否为空
     return $value === '' || $value === null || $value === [] || $value === false;
 }
-function safe_encode_path($path)
+// 模拟浏览器，对请求字符串中的非ASCII字符编码，不处理#后的标记
+function encode_url_if_unascii($url)
 {
-    // 先替换掉被编码的分隔符，防止被解码成目录
-    $path = str_replace('%2F', '[SLASH]', $path);
-    $path = rawurldecode($path);
-    $path = encode_path($path);
-    // 还原分隔符
-    $path = str_replace('[SLASH]', '%2F', $path);
-    return $path;
+    if (is_array($url)) {
+        $url_parsed = $url;
+    } else {
+        $url_parsed = parse_url($url);
+    }
+
+    // 编码 path
+    if (isset($url_parsed['path']) && preg_match('/[^\x20-\x7E]/u', $url_parsed['path'])) {
+        // 避免重复编码已是%XX的部分
+        $url_parsed['path'] = preg_replace_callback('/[^\x20-\x7E]/u', function ($m) {
+            return rawurlencode($m[0]);
+        }, $url_parsed['path']);
+    }
+    // 编码 query
+    if (isset($url_parsed['query']) && preg_match('/[^\x20-\x7E]/u', $url_parsed['query'])) {
+        $url_parsed['query'] = preg_replace_callback('/[^\x20-\x7E]/u', function ($m) {
+            return rawurlencode($m[0]);
+        }, $url_parsed['query']);
+    }
+    // 拼接URL
+    $url =
+        (isset($url_parsed['scheme']) ? $url_parsed['scheme'] . '://' : '') .
+        (isset($url_parsed['user']) ? $url_parsed['user'] . (isset($url_parsed['pass']) ? ':' . $url_parsed['pass'] : '') . '@' : '') .
+        ($url_parsed['host'] ?? '') .
+        (isset($url_parsed['port']) ? ':' . $url_parsed['port'] : '') .
+        ($url_parsed['path'] ?? '') .
+        (isset($url_parsed['query']) ? '?' . $url_parsed['query'] : '') .
+        (isset($url_parsed['fragment']) ? '#' . $url_parsed['fragment'] : '');
+    return $url;
+}
+
+// =================== 错误提示 ===================
+// 致命错误处理函数
+function pget_shutdown_handler()
+{
+    global $pget;
+    $error = error_get_last();
+    $usage_mb = round(memory_get_usage() / 1024 / 1024, 2);
+    $url = $pget->cfg['--start-url'] ?? '';
+    $log_file = __DIR__ . '/pget_shutdown.log';
+    $now = date('Y-m-d H:i:s');
+    if ($error) {
+        $type = $error['type'] ?? 0;
+        $type_str = match ($type) {
+            E_ERROR => 'E_ERROR',
+            E_PARSE => 'E_PARSE',
+            E_CORE_ERROR => 'E_CORE_ERROR',
+            E_COMPILE_ERROR => 'E_COMPILE_ERROR',
+            E_USER_ERROR => 'E_USER_ERROR',
+            E_RECOVERABLE_ERROR => 'E_RECOVERABLE_ERROR',
+            default => 'OTHER',
+        };
+        $msg = "[SHUTDOWN] {$now} [致命错误] 类型: {$type_str}\n";
+        $msg .= "  消息: {$error['message']}\n";
+        $msg .= "  文件: {$error['file']} : {$error['line']}\n";
+        $msg .= "  起始URL: {$url}\n";
+        $msg .= "  日志文件: {$log_file}\n";
+        $msg .= "  内存占用: {$usage_mb} MB\n";
+        $msg .= "  说明: 脚本因致命错误终止，请检查上述错误信息。\n";
+        echo "\n========== 脚本异常终止 ==========\n";
+        echo $msg;
+    } else {
+        $msg = "[SHUTDOWN] {$now} [正常退出]\n";
+        $msg .= "  起始URL: {$url}\n";
+        $msg .= "  内存占用: {$usage_mb} MB\n";
+        $msg .= "  说明: 脚本正常退出。\n";
+        echo "\n========== 脚本正常退出 ==========\n";
+        echo $msg;
+    }
+    file_put_contents($log_file, $msg, FILE_APPEND);
+    if (isset($pget) && method_exists($pget, 'flush_log_buffer')) {
+        $pget->flush_log_buffer();
+    }
+}
+
+// 信号处理公共函数
+function pget_signal_handler($signal_type, $signal_name, $exit_code)
+{
+    global $pget;
+    $usage_mb = round(memory_get_usage() / 1024 / 1024, 2);
+    $now = date('Y-m-d H:i:s');
+    $url = $pget->cfg['--start-url'] ?? '';
+    $log_file = __DIR__ . '/pget_shutdown.log';
+    $msg = "[SIGNAL] {$now} [{$signal_type}: {$signal_name}]\n";
+    $msg .= "  起始URL: {$url}\n";
+    $msg .= "  日志文件: {$log_file}\n";
+    $msg .= "  内存占用: {$usage_mb} MB\n";
+    $msg .= "  说明: 收到 {$signal_name} 信号，脚本被" . ($signal_name === 'SIGINT' ? '用户中断' : '外部终止') . "。\n";
+    echo "\n========== 脚本被" . ($signal_name === 'SIGINT' ? '用户中断 (Ctrl+C)' : '外部终止 (SIGTERM)') . " ==========\n";
+    echo $msg;
+    file_put_contents($log_file, $msg, FILE_APPEND);
+    if (isset($pget) && method_exists($pget, 'flush_log_buffer')) {
+        $pget->flush_log_buffer();
+    }
+    if (isset($pget->log_file_handle) && is_resource($pget->log_file_handle)) {
+        fclose($pget->log_file_handle);
+    }
+    exit($exit_code);
 }
