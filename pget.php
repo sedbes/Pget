@@ -1,4 +1,19 @@
 <?php
+// 命令行参数列表，定制初始化配置
+$param_list = [
+    '', // 控制代替脚本自名
+    '--start-url=http://www.ccbbp.com/',
+    '--directory-prefix=C:\\workspace\\wwwcrawler',
+    '--reject-regex=\?|#|&|(\.rar)|(\.zip)|(\.epub)|(\.txt)|(\.pdf)',
+    '--wait=0.5',
+    '--recursive',
+    '--no-clobber',
+    '--page-requisites',
+    '--adjust-extension',
+    '--no-check-certificate',
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    '--tries=20'
+];
 
 /**
 提示：注意看注释哦！
@@ -59,7 +74,7 @@
  * 作者：icos
  * 
  * 用法示例：
- * php pget.php --recursive --adjust-extension --restrict-file-names --no-check-certificate --tries=10 --wait=0.5 --save-cookies="cookie" --user-agent="Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)" --reject-regex="\?|#|&|(?:\.rar)|(?:\.zip)|(?:\.epub)|(?:\.txt)|(?:\.pdf)" --reject="woff,jpg,png,webp" --accept="html,js,css" --sub-string="<p id=\"b\">,<p class=\"a b\">|</p>,</p>" https://domain/
+ * php pget.php --recursive --adjust-extension --restrict-file-names --no-check-certificate --tries=10 --wait=0.5 --save-cookies="cookie" --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0" --reject-regex="\?|#|&|(?:\.rar)|(?:\.zip)|(?:\.epub)|(?:\.txt)|(?:\.pdf)" --reject="woff,jpg,png,webp" --accept="html,js,css" --sub-string="<p id=\"b\">,<p class=\"a b\">|</p>,</p>" https://domain/
  * php pget.php https://domain/link
  * php pget.php --input-file="urls.txt"
  * 
@@ -123,8 +138,12 @@ if (function_exists('pcntl_signal')) {
 // 解析命令行参数，初始化配置和主类，启动主流程
 
 try {
+    // 命令行参数正常的话，使用命令行参数
+    if (count($argv) > 2) {
+        $param_list = $argv;
+    }
     // 创建PgetConfig对象，传入命令行参数进行配置初始化
-    $config = new PgetConfig($argv);
+    $config = new PgetConfig($param_list);
     // 创建Pget对象，传入配置对象
     $pget = new Pget($config);
     // 启动主流程
@@ -149,7 +168,7 @@ class PgetConfig
         '--accept' => '',
         '--reject-regex' => '',
         '--accept-regex' => '',
-        '--sub-string' => [],
+        '--sub-string' => '',
         '--wait' => 0,
         '--no-verbose' => 0,
         '--page-requisites' => 0,
@@ -161,7 +180,7 @@ class PgetConfig
         '--no-parent' => 0,
         '--no-check-certificate' => 0,
         '--user-agent' => 'Pget/2.0',
-        '--header' => [],
+        '--header' => '',
         '--save-cookies' => '',
         '--load-cookies' => '',
         '--keep-session-cookies' => 0,
@@ -178,7 +197,7 @@ class PgetConfig
     /**
      * 构造函数，解析命令行参数，初始化配置
      */
-    public function __construct($argv)
+    public function __construct($param_list)
     {
         // 判断当前操作系统是否为Windows
         $this->isWindows = stripos(PHP_OS, 'WIN') === 0;
@@ -189,11 +208,11 @@ class PgetConfig
             }
         }
         // 遍历命令行参数，从第二个参数开始（第一个参数是脚本文件名）
-        for ($i = 1; $i < count($argv); $i++) {
+        for ($i = 1; $i < count($param_list); $i++) {
             // 检查参数是否包含等号，若包含则为键值对形式的参数
-            if (str_starts_with($argv[$i], '--') && strpos($argv[$i], '=') !== false) {
+            if (str_starts_with($param_list[$i], '--') && strpos($param_list[$i], '=') !== false) {
                 // 分割参数为键和值
-                $p = explode('=', $argv[$i], 2);
+                $p = explode('=', $param_list[$i], 2);
                 $config_name = $p[0];
                 $config_value = $p[1];
                 // 检查配置名是否存在于选项数组中
@@ -214,7 +233,7 @@ class PgetConfig
                 }
             } else {
                 // 处理无等号的参数
-                if (in_array($argv[$i], [
+                if (in_array($param_list[$i], [
                     '--no-clobber',
                     '--no-verbose',
                     '--mirror',
@@ -229,10 +248,10 @@ class PgetConfig
                     '--force-directories'
                 ])) {
                     // 这些参数为开关型参数，设置为1表示启用
-                    $this->options[$argv[$i]] = 1;
+                    $this->options[$param_list[$i]] = 1;
                 } else {
                     // 若不是开关型参数，则作为起始URL
-                    $this->options['--start-url'] = $argv[$i];
+                    $this->options['--start-url'] = $param_list[$i];
                 }
             }
         }
@@ -518,7 +537,7 @@ class Pget
             return false;
         }
         // 主循环
-        while (!$this->pending_queue->isEmpty()) {
+        while ($this->pending_queue->isEmpty() === false) {
             // 从队列中取出一个URL
             $url = $this->pending_queue->dequeue();
 
@@ -587,9 +606,9 @@ class Pget
 
 
                     // 读取文件内容，处理链接和资源
-                    $result = file_get_contents($file_path);
+                    $response = file_get_contents($file_path);
                     // 提取页面链接
-                    $links = $this->get_page_links($result, $url);
+                    $links = $this->get_page_links($response, $url);
                     // 处理页面链接，加入队列并加入链接表（导致内存异常地大）
                     $this->add_page_links($links);
                     // 只加入链接表
@@ -641,16 +660,14 @@ class Pget
         $sub_string_rules = $this->config->sub_string_rules;
 
         // 初始化结果和本地文件路径
-        $result = '';
+        $response = '';
         $local_file = '';
-        $local_file_utf8 = '';
         $is_file_exist = false;
         $url_parsed = parse_url($url);
 
         // 生成本地保存路径
         $local_file = $this->url_local_path($url, $this->dir_prefix);
-        // 把utf-8编码路径保存备用
-        $local_file_utf8 = $local_file;
+
         // 兼容中文路径（PHP8 + Windows 10 19044 不需要手动对路径转码）
         // if ($this->config->isChineseWindows && !mb_detect_encoding($local_file, 'GB2312')) {$local_file = mb_convert_encoding($local_file, 'GB2312');}
         // 本地文件名不存在时跳过
@@ -688,8 +705,13 @@ class Pget
             // 检查URL中非ASCII字符，以便让cURL能够处理
             $url_getting = rawurlencodex($url);
             // 发起网络请求
-            list($result, $http_info) = $this->browser($url_getting);
-
+            list($response, $http_info) = $this->browser($url_getting);
+            // 若响应内容为空，则输出日志信息并返回
+            if ($response === false) {
+                $this->link_table_add_item($url, false); // 明确标记失败状态
+                $this->echo_logs($this->loop_count, $url, 'Response Null');
+                return false;
+            }
             // --adjust-extension: 仅对既不是目录也没有扩展名的URL，根据content-type补全扩展名
             if ($this->cfg['--adjust-extension']) {
                 if (empty($http_info['content_type'])) {
@@ -710,34 +732,28 @@ class Pget
                 if (!$has_ext && $content_type) {
                     $url4 = $url . '.' . $content_type;
                     $local_file .= '.' . $content_type;
-                    $local_file_utf8 .= '.' . $content_type;
                     // 再次检查检查本地文件是否存在
                     $is_file_exist = ($is_file_exist || $this->link_table_get_item($url4)) ? true : false;
                 }
             }
 
-            // 若响应内容为空，则输出日志信息并返回
-            if (empty($result)) {
-                $this->echo_logs($this->loop_count, $url, 'Response Null');
-                return false;
-            }
             // 若设置了转换为UTF-8编码，则进行编码转换
             if ($this->cfg['--utf-8']) {
-                $result = $this->mb_encode($result);
+                $response = $this->mb_encode($response);
             }
             // 若设置了镜像或递归下载，则提取并处理页面链接
             if ($this->cfg['--mirror'] || $this->cfg['--recursive']) {
-                $links = $this->get_page_links($result, $url);
+                $links = $this->get_page_links($response, $url);
                 $this->add_page_links($links);
                 $this->echo_logs($this->loop_count, $url,  'Links Add');
             }
             // 若设置了内容截取，则进行内容截取
             if (!empty($this->cfg['--sub-string'])) {
-                $result = $this->sub_content_all($result, $sub_string_rules);
+                $response = $this->sub_content_all($response, $sub_string_rules);
                 $this->echo_logs($this->loop_count, $url,  'Response Cut');
             }
             // 若截取后的内容为空，则返回
-            if (empty($result)) {
+            if (empty($response)) {
                 return false;
             }
 
@@ -758,8 +774,8 @@ class Pget
                 // 判断是否需要保存文件。上方有 --adjust-extension 添加扩展名导致 is_file_exist 被修正的情况，故需要再次判断
                 if ($is_file_exist && $this->cfg['--no-clobber']) {
                     $this->echo_logs($this->loop_count, date('Y-m-d H:i:s'), "{$url} -> {$local_file}", 'Unwrite');
-                } elseif (@file_put_contents($local_file, $result) === false) {
-                    $this->echo_logs('FORCEECHO', $this->loop_count, date('Y-m-d H:i:s'), $url, 'Failed to write file: ' . $local_file_utf8);
+                } elseif (@file_put_contents($local_file, $response) === false) {
+                    $this->echo_logs('FORCEECHO', $this->loop_count, date('Y-m-d H:i:s'), $url, 'Failed to write file: ' . $local_file);
                     // 写入失败则返回false
                     return false;
                 }
